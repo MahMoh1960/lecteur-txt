@@ -1,0 +1,51 @@
+name: Construire l'APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Assembler le projet Android (les fichiers du dépôt sont à plat)
+        run: |
+          mkdir -p work/src/main/java/ma/lecteurtxt work/src/main/res/drawable
+          cp *.java work/src/main/java/ma/lecteurtxt/
+          cp AndroidManifest.xml work/src/main/
+          cp ic_launcher.xml work/src/main/res/drawable/
+          cp build.gradle settings.gradle gradle.properties cle.jks work/
+
+      - name: Compiler
+        working-directory: work
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Préparer l'APK
+        run: cp work/build/outputs/apk/debug/*.apk LecteurTXT.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LecteurTXT
+          path: LecteurTXT.apk
+
+      - name: Publier dans les Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: Lecteur TXT (build ${{ github.run_number }})
+          files: LecteurTXT.apk
