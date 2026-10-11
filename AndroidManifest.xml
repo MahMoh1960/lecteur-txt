@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="Lecteur TXT"
+        android:largeHeap="true"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|smallestScreenSize|uiMode|density|locale|layoutDirection|fontScale"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Fichiers texte reconnus par leur type MIME -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.EDIT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/json" />
+                <data android:mimeType="application/xml" />
+            </intent-filter>
+
+            <!-- Fichiers reconnus par leur extension (type MIME générique) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+            <data android:pathPattern=".*\\.txt" />
+            <data android:pathPattern=".*\\..*\\.txt" />
+            <data android:pathPattern=".*\\..*\\..*\\.txt" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.txt" />
+            <data android:pathPattern=".*\\.TXT" />
+            <data android:pathPattern=".*\\..*\\.TXT" />
+            <data android:pathPattern=".*\\..*\\..*\\.TXT" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.TXT" />
+            <data android:pathPattern=".*\\.log" />
+            <data android:pathPattern=".*\\..*\\.log" />
+            <data android:pathPattern=".*\\..*\\..*\\.log" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.log" />
+            <data android:pathPattern=".*\\.csv" />
+            <data android:pathPattern=".*\\..*\\.csv" />
+            <data android:pathPattern=".*\\..*\\..*\\.csv" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.csv" />
+            <data android:pathPattern=".*\\.md" />
+            <data android:pathPattern=".*\\..*\\.md" />
+            <data android:pathPattern=".*\\..*\\..*\\.md" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.md" />
+            <data android:pathPattern=".*\\.srt" />
+            <data android:pathPattern=".*\\..*\\.srt" />
+            <data android:pathPattern=".*\\..*\\..*\\.srt" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.srt" />
+            <data android:pathPattern=".*\\.ini" />
+            <data android:pathPattern=".*\\..*\\.ini" />
+            <data android:pathPattern=".*\\..*\\..*\\.ini" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.ini" />
+            <data android:pathPattern=".*\\.cfg" />
+            <data android:pathPattern=".*\\..*\\.cfg" />
+            <data android:pathPattern=".*\\..*\\..*\\.cfg" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.cfg" />
+            <data android:pathPattern=".*\\.conf" />
+            <data android:pathPattern=".*\\..*\\.conf" />
+            <data android:pathPattern=".*\\..*\\..*\\.conf" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.conf" />
+            <data android:pathPattern=".*\\.json" />
+            <data android:pathPattern=".*\\..*\\.json" />
+            <data android:pathPattern=".*\\..*\\..*\\.json" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.json" />
+            <data android:pathPattern=".*\\.xml" />
+            <data android:pathPattern=".*\\..*\\.xml" />
+            <data android:pathPattern=".*\\..*\\..*\\.xml" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.xml" />
+            <data android:pathPattern=".*\\.tsv" />
+            <data android:pathPattern=".*\\..*\\.tsv" />
+            <data android:pathPattern=".*\\..*\\..*\\.tsv" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.tsv" />
+            <data android:pathPattern=".*\\.lrc" />
+            <data android:pathPattern=".*\\..*\\.lrc" />
+            <data android:pathPattern=".*\\..*\\..*\\.lrc" />
+            <data android:pathPattern=".*\\..*\\..*\\..*\\.lrc" />
+            </intent-filter>
+
+            <!-- Texte ou fichier partagé depuis une autre application -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

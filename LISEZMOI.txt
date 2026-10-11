@@ -1,0 +1,19 @@
+LECTEUR TXT - projet Android (fichiers à plat, sans dossier)
+
+COMMENT OBTENIR L'APK (compilation automatique par GitHub)
+1. Créez un dépôt GitHub (par exemple « lecteur-txt ») et envoyez-y TOUS les fichiers de cette archive, à la racine.
+2. Sur GitHub, « Add file » > « Create new file ». Dans le nom, tapez exactement :
+      .github/workflows/build.yml
+   (en tapant les « / », GitHub crée les dossiers tout seul).
+   Collez-y le contenu du fichier build.yml de l'archive, puis « Commit changes ».
+3. Onglet « Actions » : la compilation démarre seule (3 à 5 minutes).
+   Quand elle est verte, ouvrez « Releases » (colonne de droite du dépôt) et téléchargez LecteurTXT.apk.
+4. Installez l'APK (autorisez l'installation depuis cette source si Android le demande).
+
+UTILISATION
+- Appuyez sur un fichier .txt (ou .log, .csv, .md, .json, .xml, .srt, .ini...) dans votre gestionnaire de fichiers,
+  puis choisissez « Lecteur TXT » dans « Ouvrir avec » (choisissez « Toujours » pour en faire l'application par défaut).
+- Zoom à deux doigts, appui long sur une ligne (copier / partager / modifier ici), menu ⋮ pour le reste.
+
+MISES À JOUR
+La clé de signature est incluse (cle.jks) : chaque nouvelle version s'installe par-dessus la précédente.
