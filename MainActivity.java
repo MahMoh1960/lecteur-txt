@@ -14,6 +14,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.provider.OpenableColumns;
 import android.text.Editable;
 import android.text.InputType;
@@ -25,9 +30,11 @@ import android.text.style.BackgroundColorSpan;
 import android.text.style.ForegroundColorSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
@@ -49,8 +56,10 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -162,6 +171,32 @@ public class MainActivity extends Activity {
     private int mlen;
     private String lastQuery = "";
 
+    // défilement automatique, voix, signet
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private boolean autoScrolling;
+    private float scrollAccum;
+    private long lastTick;
+    private int speedProgress = 35;
+    private TextToSpeech tts;
+    private boolean ttsReady;
+    private boolean speaking;
+    private int ttsLine = -1;
+    private int ttsResume = -1;
+    private int ttsLang;
+    private float ttsRate = 1.0f;
+    private int speakGen;
+    private String lastLatin = "fr";
+    private Runnable pendingTtsReady;
+    private final Set<String> ttsWarned = new HashSet<>();
+    private int bookmarkOffset = -1;
+    private int bookmarkLine = -1;
+    private LinearLayout toolBar;
+    private TextView btnScroll;
+    private TextView btnSpeak;
+    private TextView btnBookmark;
+    private TextView btnToolsClose;
+    private SeekBar speedBar;
+
     // ----- Vues -----
     private LinearLayout root;
     private LinearLayout bar;
@@ -201,6 +236,9 @@ public class MainActivity extends Activity {
         if (theme < 0 || theme >= THEMES.length) {
             theme = 0;
         }
+        speedProgress = sp.getInt("speed", 35);
+        ttsLang = sp.getInt("ttsLang", 0);
+        ttsRate = sp.getFloat("ttsRate", 1.0f);
         buildUi();
         applyTheme();
         showMode(MODE_HOME);
@@ -218,8 +256,20 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         sp.edit().putFloat("size", textSp).putInt("theme", theme).apply();
+        stopAutoScroll();
         if (hasFile && curUri != null) {
             recents.setOffset(curUri.toString(), currentOffset());
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        handler.removeCallbacksAndMessages(null);
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+            tts = null;
         }
     }
 
@@ -418,6 +468,15 @@ public class MainActivity extends Activity {
         listView.setDivider(null);
         listView.setDividerHeight(0);
         listView.setFastScrollEnabled(true);
+        listView.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent e) {
+                if (e.getAction() == MotionEvent.ACTION_DOWN && autoScrolling) {
+                    stopAutoScroll();
+                }
+                return false;
+            }
+        });
         listView.setOnItemLongClickListener(new android.widget.AdapterView.OnItemLongClickListener() {
             @Override
             public boolean onItemLongClick(android.widget.AdapterView<?> parent, View view, int position, long id) {
@@ -471,7 +530,78 @@ public class MainActivity extends Activity {
         content.addView(listView, new ViewGroup.LayoutParams(mp));
         content.addView(editor, new ViewGroup.LayoutParams(mp));
 
+        toolBar = new LinearLayout(this);
+        toolBar.setOrientation(LinearLayout.HORIZONTAL);
+        toolBar.setGravity(Gravity.CENTER_VERTICAL);
+        toolBar.setPadding(dp(6), 0, dp(6), 0);
+        toolBar.setVisibility(View.GONE);
+        btnScroll = toolText("▶", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleAutoScroll();
+            }
+        });
+        speedBar = new SeekBar(this);
+        speedBar.setMax(100);
+        speedBar.setProgress(speedProgress);
+        speedBar.setContentDescription("Vitesse de défilement");
+        speedBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {
+                if (fromUser) {
+                    speedProgress = p;
+                    sp.edit().putInt("speed", p).apply();
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar sb) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar sb) {
+            }
+        });
+        btnSpeak = toolText("🔊", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleSpeak();
+            }
+        });
+        btnBookmark = toolText("🔖", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                bookmarkButton();
+            }
+        });
+        btnToolsClose = toolText("✕", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                hideTools();
+            }
+        });
+        toolBar.addView(btnScroll, new LinearLayout.LayoutParams(dp(44), dp(48)));
+        toolBar.addView(speedBar, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        toolBar.addView(btnSpeak, new LinearLayout.LayoutParams(dp(44), dp(48)));
+        toolBar.addView(btnBookmark, new LinearLayout.LayoutParams(dp(44), dp(48)));
+        toolBar.addView(btnToolsClose, new LinearLayout.LayoutParams(dp(36), dp(48)));
+        root.addView(toolBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
+
         setContentView(root);
+    }
+
+    private TextView toolText(String label, View.OnClickListener l) {
+        TextView t = new TextView(this);
+        t.setText(label);
+        t.setTextSize(20);
+        t.setTextColor(0xFFFFFFFF);
+        t.setGravity(Gravity.CENTER);
+        TypedValue tv = new TypedValue();
+        if (getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)) {
+            t.setBackgroundResource(tv.resourceId);
+        }
+        t.setOnClickListener(l);
+        return t;
     }
 
     private LinearLayout buildHome() {
@@ -580,6 +710,7 @@ public class MainActivity extends Activity {
         editor.setBackgroundColor(bg);
         editor.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSp);
         home.setBackgroundColor(bg);
+        toolBar.setBackgroundColor(barC);
         homeTitle.setTextColor(fg);
         homeHint.setTextColor(fg);
         recTitle.setTextColor(fg);
@@ -592,6 +723,11 @@ public class MainActivity extends Activity {
 
     private void showMode(int m) {
         mode = m;
+        if (m != MODE_READ) {
+            stopAutoScroll();
+            stopSpeaking(false);
+            toolBar.setVisibility(View.GONE);
+        }
         home.setVisibility(m == MODE_HOME ? View.VISIBLE : View.GONE);
         listView.setVisibility(m == MODE_READ ? View.VISIBLE : View.GONE);
         editor.setVisibility(m == MODE_EDIT ? View.VISIBLE : View.GONE);
@@ -660,6 +796,13 @@ public class MainActivity extends Activity {
             }
             tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSp);
             tv.setTextColor(THEMES[theme][1]);
+            if (speaking && p == ttsLine) {
+                tv.setBackgroundColor(0x55FFC107);
+            } else if (p == bookmarkLine) {
+                tv.setBackgroundColor(0x44FF7043);
+            } else {
+                tv.setBackgroundColor(0);
+            }
             int b = Math.min(idx.e[p], text.length());
             int a = Math.min(idx.s[p], b);
             CharSequence cs = text.substring(a, b);
@@ -867,6 +1010,10 @@ public class MainActivity extends Activity {
         editing = false;
         dirtyIndex = false;
         clearSearchState();
+        stopAutoScroll();
+        stopSpeaking(false);
+        bookmarkOffset = sp.getInt("bm:" + uri.toString(), -1);
+        refreshBookmarkLine();
         showMode(MODE_READ);
         adapter.notifyDataSetChanged();
         final int off = recents.offsetOf(uri.toString());
@@ -877,6 +1024,9 @@ public class MainActivity extends Activity {
             }
         });
         recents.touch(uri.toString(), shown, off);
+        if (bookmarkOffset >= 0) {
+            toast("🔖 Signet disponible : menu ⋮ › Aller au signet");
+        }
         if (tr) {
             toast("Fichier très volumineux : seuls les premiers 40 Mo sont affichés (lecture seule).");
         }
@@ -898,6 +1048,10 @@ public class MainActivity extends Activity {
                 hasFile = true;
                 modified = !content.isEmpty();
                 clearSearchState();
+                stopAutoScroll();
+                stopSpeaking(false);
+                bookmarkOffset = -1;
+                bookmarkLine = -1;
                 adapter.notifyDataSetChanged();
                 editing = false;
                 enterEdit();
@@ -1264,6 +1418,7 @@ public class MainActivity extends Activity {
             idx = index(text);
             dirtyIndex = false;
         }
+        refreshBookmarkLine();
         clearMatches();
         showMode(MODE_READ);
         adapter.notifyDataSetChanged();
@@ -1470,6 +1625,18 @@ public class MainActivity extends Activity {
             m.add(0, 5, 0, editing ? "Mode lecture" : "Modifier");
             m.add(0, 6, 0, "Enregistrer");
             m.add(0, 7, 0, "Enregistrer sous…");
+            if (!editing) {
+                m.add(0, 20, 0, toolBar.getVisibility() == View.VISIBLE ? "Masquer les outils de lecture" : "Outils de lecture");
+                m.add(0, 21, 0, autoScrolling ? "Arrêter le défilement" : "Défilement automatique");
+                m.add(0, 22, 0, speaking ? "Arrêter la lecture vocale" : "Lire à voix haute");
+                m.add(0, 23, 0, "Langue de la voix");
+                m.add(0, 24, 0, "Vitesse de la voix");
+                m.add(0, 25, 0, "Placer un signet ici");
+                if (bookmarkOffset >= 0) {
+                    m.add(0, 26, 0, "Aller au signet");
+                    m.add(0, 27, 0, "Supprimer le signet");
+                }
+            }
             boolean sel = editing && editor.getSelectionStart() != editor.getSelectionEnd();
             m.add(0, 11, 0, sel ? "Copier la sélection" : "Copier tout");
             m.add(0, 12, 0, sel ? "Partager la sélection" : "Partager");
@@ -1537,6 +1704,34 @@ public class MainActivity extends Activity {
             case 15:
                 showInfo();
                 break;
+            case 20:
+                if (toolBar.getVisibility() == View.VISIBLE) {
+                    hideTools();
+                } else {
+                    showTools();
+                }
+                break;
+            case 21:
+                toggleAutoScroll();
+                break;
+            case 22:
+                toggleSpeak();
+                break;
+            case 23:
+                showVoiceLangDialog();
+                break;
+            case 24:
+                showVoiceRateDialog();
+                break;
+            case 25:
+                setBookmark(-1);
+                break;
+            case 26:
+                gotoBookmark();
+                break;
+            case 27:
+                clearBookmark();
+                break;
             default:
                 break;
         }
@@ -1603,7 +1798,8 @@ public class MainActivity extends Activity {
         }
         final String line = text.substring(idx.s[position], idx.e[position]);
         final int off = idx.s[position];
-        String[] items = {"Copier la ligne", "Partager la ligne", "Modifier à cet endroit"};
+        String[] items = {"Copier la ligne", "Partager la ligne", "Lire à partir d'ici",
+                "Placer un signet ici", "Modifier à cet endroit"};
         new AlertDialog.Builder(this)
                 .setItems(items, new android.content.DialogInterface.OnClickListener() {
                     @Override
@@ -1612,6 +1808,11 @@ public class MainActivity extends Activity {
                             copyText(line);
                         } else if (which == 1) {
                             shareText(line);
+                        } else if (which == 2) {
+                            stopSpeaking(false);
+                            startSpeaking(position);
+                        } else if (which == 3) {
+                            setBookmark(off);
                         } else {
                             enterEdit();
                             if (editing) {
@@ -1742,5 +1943,460 @@ public class MainActivity extends Activity {
             return String.format(Locale.FRANCE, "%.1f Ko", b / 1024.0);
         }
         return String.format(Locale.FRANCE, "%.1f Mo", b / (1024.0 * 1024.0));
+    }
+
+    // =====================================================================
+    // Outils de lecture : défilement automatique
+    // =====================================================================
+    private void showTools() {
+        if (mode == MODE_READ) {
+            toolBar.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void hideTools() {
+        stopAutoScroll();
+        stopSpeaking(false);
+        toolBar.setVisibility(View.GONE);
+    }
+
+    private void updateToolButtons() {
+        if (btnScroll != null) {
+            btnScroll.setText(autoScrolling ? "⏸" : "▶");
+        }
+        if (btnSpeak != null) {
+            btnSpeak.setText(speaking ? "⏹" : "🔊");
+        }
+    }
+
+    private void updateKeepOn() {
+        if (autoScrolling || speaking) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+    }
+
+    private float speedPxPerSec() {
+        float p = speedProgress / 100f;
+        float dpv = 3f + p * p * 150f;
+        return dpv * getResources().getDisplayMetrics().density;
+    }
+
+    private final Runnable scrollTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!autoScrolling) {
+                return;
+            }
+            long now = SystemClock.uptimeMillis();
+            float dt = Math.min(100L, now - lastTick) / 1000f;
+            lastTick = now;
+            scrollAccum += speedPxPerSec() * dt;
+            int dy = (int) scrollAccum;
+            if (dy >= 1) {
+                scrollAccum -= dy;
+                listView.scrollListBy(dy);
+                if (!listView.canScrollList(1)) {
+                    stopAutoScroll();
+                    Toast.makeText(MainActivity.this, "Fin du fichier", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+            }
+            handler.postDelayed(this, 16);
+        }
+    };
+
+    private void toggleAutoScroll() {
+        if (autoScrolling) {
+            stopAutoScroll();
+        } else {
+            startAutoScroll();
+        }
+    }
+
+    private void startAutoScroll() {
+        if (!hasFile || mode != MODE_READ) {
+            toast("Le défilement automatique fonctionne en mode lecture.");
+            return;
+        }
+        stopSpeaking(false);
+        showTools();
+        autoScrolling = true;
+        scrollAccum = 0f;
+        lastTick = SystemClock.uptimeMillis();
+        updateKeepOn();
+        updateToolButtons();
+        handler.postDelayed(scrollTick, 16);
+    }
+
+    private void stopAutoScroll() {
+        if (!autoScrolling) {
+            return;
+        }
+        autoScrolling = false;
+        handler.removeCallbacks(scrollTick);
+        updateKeepOn();
+        updateToolButtons();
+    }
+
+    // =====================================================================
+    // Lecture à voix haute (français, arabe, anglais)
+    // =====================================================================
+    private static final Set<String> FR_WORDS = new HashSet<>(Arrays.asList(
+            "le", "la", "les", "des", "du", "de", "et", "un", "une", "est", "que", "qui", "dans", "pour",
+            "sur", "au", "aux", "ce", "cette", "ne", "pas", "avec", "par", "se", "il", "elle", "nous",
+            "vous", "ils", "sont", "être", "ont", "plus", "mais", "ou", "où", "en", "son", "sa", "ses",
+            "l", "d", "qu", "je", "tu", "mon", "ma", "mes", "leur", "leurs", "comme", "fait"));
+    private static final Set<String> EN_WORDS = new HashSet<>(Arrays.asList(
+            "the", "of", "and", "to", "in", "is", "that", "it", "for", "with", "was", "are", "by", "this",
+            "be", "from", "or", "at", "not", "have", "which", "you", "his", "her", "they", "we", "he",
+            "she", "their", "but", "had", "has", "were", "will", "would", "there", "been", "what", "when"));
+
+    private Locale pickLocale(String s) {
+        if (ttsLang == 1) {
+            return Locale.FRENCH;
+        }
+        if (ttsLang == 2) {
+            return Locale.forLanguageTag("ar");
+        }
+        if (ttsLang == 3) {
+            return Locale.ENGLISH;
+        }
+        int ar = 0;
+        int la = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if ((c >= 0x0600 && c <= 0x06FF) || (c >= 0x0750 && c <= 0x077F)) {
+                ar++;
+            } else if (Character.isLetter(c)) {
+                la++;
+            }
+        }
+        if (ar > 0 && ar >= la) {
+            return Locale.forLanguageTag("ar");
+        }
+        int fr = 0;
+        int en = 0;
+        String low = s.toLowerCase(Locale.ROOT);
+        for (int i = 0; i < low.length(); i++) {
+            if ("éèêàùçôîâûï".indexOf(low.charAt(i)) >= 0) {
+                fr += 2;
+            }
+        }
+        for (String w : low.split("[^\\p{L}]+")) {
+            if (FR_WORDS.contains(w)) {
+                fr++;
+            }
+            if (EN_WORDS.contains(w)) {
+                en++;
+            }
+        }
+        if (fr > en) {
+            lastLatin = "fr";
+        } else if (en > fr) {
+            lastLatin = "en";
+        }
+        return "en".equals(lastLatin) ? Locale.ENGLISH : Locale.FRENCH;
+    }
+
+    private void toggleSpeak() {
+        if (speaking) {
+            stopSpeaking(true);
+        } else {
+            startSpeaking(-1);
+        }
+    }
+
+    private void ensureTts(Runnable ready) {
+        if (tts != null && ttsReady) {
+            ready.run();
+            return;
+        }
+        pendingTtsReady = ready;
+        if (tts != null) {
+            return;
+        }
+        tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(final int status) {
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        Runnable r = pendingTtsReady;
+                        pendingTtsReady = null;
+                        if (status == TextToSpeech.SUCCESS && tts != null) {
+                            ttsReady = true;
+                            tts.setSpeechRate(ttsRate);
+                            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                                @Override
+                                public void onStart(String id) {
+                                }
+
+                                @Override
+                                public void onDone(final String id) {
+                                    handler.post(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            onUtteranceDone(id);
+                                        }
+                                    });
+                                }
+
+                                @Override
+                                public void onError(final String id) {
+                                    handler.post(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            onUtteranceDone(id);
+                                        }
+                                    });
+                                }
+                            });
+                            if (r != null) {
+                                r.run();
+                            }
+                        } else {
+                            tts = null;
+                            ttsReady = false;
+                            toast("Synthèse vocale indisponible sur cet appareil.");
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private void startSpeaking(final int fromLine) {
+        if (!hasFile || mode != MODE_READ) {
+            toast("La lecture à voix haute fonctionne en mode lecture.");
+            return;
+        }
+        stopAutoScroll();
+        showTools();
+        ensureTts(new Runnable() {
+            @Override
+            public void run() {
+                int start = fromLine >= 0 ? fromLine
+                        : (ttsResume >= 0 ? ttsResume : listView.getFirstVisiblePosition());
+                start = Math.max(0, Math.min(start, idx.n - 1));
+                speaking = true;
+                updateKeepOn();
+                updateToolButtons();
+                speakLine(start, ++speakGen);
+            }
+        });
+    }
+
+    private void stopSpeaking(boolean remember) {
+        boolean was = speaking;
+        int cur = ttsLine;
+        speaking = false;
+        speakGen++;
+        ttsLine = -1;
+        if (was && tts != null && ttsReady) {
+            tts.stop();
+        }
+        ttsResume = remember ? cur : -1;
+        if (was) {
+            adapter.notifyDataSetChanged();
+        }
+        updateKeepOn();
+        updateToolButtons();
+    }
+
+    private void onUtteranceDone(String id) {
+        try {
+            int c = id.indexOf(':');
+            int gen = Integer.parseInt(id.substring(1, c));
+            int line = Integer.parseInt(id.substring(c + 1));
+            if (!speaking || gen != speakGen) {
+                return;
+            }
+            speakLine(line + 1, gen);
+        } catch (Exception ignored) {
+            // identifiant inattendu : ignoré
+        }
+    }
+
+    private static boolean hasReadable(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            if (Character.isLetterOrDigit(s.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void speakLine(int line, int gen) {
+        if (gen != speakGen || !speaking || tts == null) {
+            return;
+        }
+        while (line < idx.n) {
+            String s = text.substring(idx.s[line], Math.min(idx.e[line], text.length())).trim();
+            if (hasReadable(s)) {
+                Locale loc = pickLocale(s);
+                int av = tts.isLanguageAvailable(loc);
+                if (av == TextToSpeech.LANG_MISSING_DATA || av == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    warnVoice(loc);
+                    line++;
+                    continue;
+                }
+                tts.setLanguage(loc);
+                ttsLine = line;
+                int first = listView.getFirstVisiblePosition();
+                int last = listView.getLastVisiblePosition();
+                if (line < first || line >= last) {
+                    listView.setSelectionFromTop(line, dp(60));
+                }
+                adapter.notifyDataSetChanged();
+                tts.speak(s, TextToSpeech.QUEUE_FLUSH, new Bundle(), "g" + gen + ":" + line);
+                return;
+            }
+            line++;
+        }
+        stopSpeaking(false);
+        toast("Lecture terminée");
+    }
+
+    private void warnVoice(Locale loc) {
+        String lang = loc.getLanguage();
+        if (ttsWarned.add(lang)) {
+            String nom = "ar".equals(lang) ? "arabe" : ("en".equals(lang) ? "anglaise" : "française");
+            toast("Voix " + nom + " non installée : ajoutez-la dans les réglages de synthèse vocale de votre téléphone. Les passages dans cette langue sont ignorés.");
+        }
+    }
+
+    private void showVoiceLangDialog() {
+        String[] items = {"Automatique (français, arabe, anglais)", "Français", "Arabe", "Anglais"};
+        new AlertDialog.Builder(this)
+                .setTitle("Langue de la voix")
+                .setSingleChoiceItems(items, ttsLang, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        ttsLang = which;
+                        sp.edit().putInt("ttsLang", which).apply();
+                        d.dismiss();
+                    }
+                })
+                .show();
+    }
+
+    private void showVoiceRateDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(16), dp(24), dp(8));
+        final TextView label = new TextView(this);
+        label.setTextSize(16);
+        label.setText("Vitesse de la voix : " + Math.round(ttsRate * 100) + " %");
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(150);
+        sb.setProgress(Math.round(ttsRate * 100) - 50);
+        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                if (fromUser) {
+                    ttsRate = (p + 50) / 100f;
+                    label.setText("Vitesse de la voix : " + Math.round(ttsRate * 100) + " %");
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar s) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar s) {
+                sp.edit().putFloat("ttsRate", ttsRate).apply();
+                if (tts != null && ttsReady) {
+                    tts.setSpeechRate(ttsRate);
+                }
+            }
+        });
+        box.addView(label);
+        box.addView(sb);
+        new AlertDialog.Builder(this)
+                .setTitle("Vitesse de la voix")
+                .setView(box)
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
+    // =====================================================================
+    // Signet (un par fichier)
+    // =====================================================================
+    private void refreshBookmarkLine() {
+        bookmarkLine = (bookmarkOffset >= 0 && hasFile && idx.n > 0) ? lineOf(bookmarkOffset) : -1;
+    }
+
+    private void bookmarkButton() {
+        if (!hasFile) {
+            return;
+        }
+        if (bookmarkOffset < 0) {
+            setBookmark(-1);
+            return;
+        }
+        String[] items = {"Aller au signet", "Déplacer le signet ici", "Supprimer le signet"};
+        new AlertDialog.Builder(this)
+                .setTitle("Signet")
+                .setItems(items, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        if (which == 0) {
+                            gotoBookmark();
+                        } else if (which == 1) {
+                            setBookmark(-1);
+                        } else {
+                            clearBookmark();
+                        }
+                    }
+                })
+                .show();
+    }
+
+    /** Place le signet à l'offset donné, ou à la position de lecture actuelle si offset < 0. */
+    private void setBookmark(int offset) {
+        if (!hasFile) {
+            return;
+        }
+        if (curUri == null) {
+            toast("Enregistrez d'abord le fichier pour y placer un signet.");
+            return;
+        }
+        int off = offset;
+        if (off < 0) {
+            off = (speaking && ttsLine >= 0 && ttsLine < idx.n) ? idx.s[ttsLine] : currentOffset();
+        }
+        bookmarkOffset = off;
+        sp.edit().putInt("bm:" + curUri.toString(), off).apply();
+        refreshBookmarkLine();
+        adapter.notifyDataSetChanged();
+        Toast.makeText(this, "🔖 Signet placé", Toast.LENGTH_SHORT).show();
+    }
+
+    private void gotoBookmark() {
+        if (bookmarkOffset < 0) {
+            toast("Aucun signet dans ce fichier.");
+            return;
+        }
+        if (editing) {
+            int p = Math.min(bookmarkOffset, editor.length());
+            editor.setSelection(p);
+            editor.bringPointIntoView(p);
+        } else {
+            stopAutoScroll();
+            listView.setSelectionFromTop(lineOf(bookmarkOffset), dp(90));
+        }
+    }
+
+    private void clearBookmark() {
+        if (curUri != null) {
+            sp.edit().remove("bm:" + curUri.toString()).apply();
+        }
+        bookmarkOffset = -1;
+        bookmarkLine = -1;
+        adapter.notifyDataSetChanged();
+        Toast.makeText(this, "Signet supprimé", Toast.LENGTH_SHORT).show();
     }
 }
