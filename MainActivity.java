@@ -924,7 +924,45 @@ public class MainActivity extends Activity {
                 }
             }
         }
-        return (n == null || n.isEmpty()) ? "Sans titre.txt" : n;
+        return (n == null || n.isEmpty()) ? "Sans titre.txt" : fixName(n);
+    }
+
+    /**
+     * Répare les noms de fichiers arabes enregistrés en Windows-1256 mais lus comme du Windows-1252
+     * (ex. fichiers extraits d'anciennes archives). Si la conversion ne donne pas de lettres arabes,
+     * le nom d'origine est conservé.
+     */
+    private static String fixName(String n) {
+        boolean suspect = false;
+        for (int i = 0; i < n.length(); i++) {
+            char ch = n.charAt(i);
+            if (ch >= 0x0600 && ch <= 0x06FF) {
+                return n;
+            }
+            if (ch >= 0x80) {
+                suspect = true;
+            }
+        }
+        if (!suspect) {
+            return n;
+        }
+        Charset w1252 = TextCodec.forName("windows-1252");
+        Charset w1256 = TextCodec.forName("windows-1256");
+        if (w1252 == null || w1256 == null || !w1252.newEncoder().canEncode(n)) {
+            return n;
+        }
+        String fixed = new String(n.getBytes(w1252), w1256);
+        int arabic = 0;
+        for (int i = 0; i < fixed.length(); i++) {
+            char ch = fixed.charAt(i);
+            if (ch == '�') {
+                return n;
+            }
+            if (ch >= 0x0621 && ch <= 0x064A) {
+                arabic++;
+            }
+        }
+        return arabic >= 2 ? fixed : n;
     }
 
     private long querySize(Uri u) {
