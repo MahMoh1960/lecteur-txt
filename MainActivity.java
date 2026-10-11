@@ -847,7 +847,14 @@ public class MainActivity extends Activity {
 
     private void applyLoaded(Uri uri, String name, long bytes, TextCodec.Result r, LineIndex li, boolean tr) {
         curUri = uri;
-        curName = name;
+        String shown = name;
+        if (looksCorrupted(name)) {
+            String t = firstLineTitle(r.text);
+            if (!t.isEmpty()) {
+                shown = t + ".txt";
+            }
+        }
+        curName = shown;
         text = r.text;
         charset = r.charset;
         bom = r.bom;
@@ -869,7 +876,7 @@ public class MainActivity extends Activity {
                 listView.setSelection(lineOf(off));
             }
         });
-        recents.touch(uri.toString(), name, off);
+        recents.touch(uri.toString(), shown, off);
         if (tr) {
             toast("Fichier très volumineux : seuls les premiers 40 Mo sont affichés (lecture seule).");
         }
@@ -924,45 +931,52 @@ public class MainActivity extends Activity {
                 }
             }
         }
-        return (n == null || n.isEmpty()) ? "Sans titre.txt" : fixName(n);
+        return (n == null || n.isEmpty()) ? "Sans titre.txt" : n;
     }
 
-    /**
-     * Répare les noms de fichiers arabes enregistrés en Windows-1256 mais lus comme du Windows-1252
-     * (ex. fichiers extraits d'anciennes archives). Si la conversion ne donne pas de lettres arabes,
-     * le nom d'origine est conservé.
-     */
-    private static String fixName(String n) {
-        boolean suspect = false;
-        for (int i = 0; i < n.length(); i++) {
-            char ch = n.charAt(i);
-            if (ch >= 0x0600 && ch <= 0x06FF) {
-                return n;
+    private static final String FRENCH_CHARS = "àâäçèéêëîïôöùûüÿÀÂÄÇÈÉÊËÎÏÔÖÙÛÜŸœŒ«»°’‘“”–—…€";
+
+    /** Vrai si le nom contient surtout des caractères illisibles (nom mal encodé dans le système de fichiers). */
+    static boolean looksCorrupted(String name) {
+        int dot = name.lastIndexOf('.');
+        String base = (dot > 0 && name.length() - dot <= 6) ? name.substring(0, dot) : name;
+        int odd = 0;
+        int total = 0;
+        for (int i = 0; i < base.length(); i++) {
+            char ch = base.charAt(i);
+            if (Character.isWhitespace(ch) || Character.isDigit(ch)) {
+                continue;
             }
-            if (ch >= 0x80) {
-                suspect = true;
-            }
-        }
-        if (!suspect) {
-            return n;
-        }
-        Charset w1252 = TextCodec.forName("windows-1252");
-        Charset w1256 = TextCodec.forName("windows-1256");
-        if (w1252 == null || w1256 == null || !w1252.newEncoder().canEncode(n)) {
-            return n;
-        }
-        String fixed = new String(n.getBytes(w1252), w1256);
-        int arabic = 0;
-        for (int i = 0; i < fixed.length(); i++) {
-            char ch = fixed.charAt(i);
-            if (ch == '�') {
-                return n;
-            }
-            if (ch >= 0x0621 && ch <= 0x064A) {
-                arabic++;
+            total++;
+            boolean arabic = ch >= 0x0600 && ch <= 0x06FF;
+            if (ch >= 0x80 && !arabic && FRENCH_CHARS.indexOf(ch) < 0) {
+                odd++;
             }
         }
-        return arabic >= 2 ? fixed : n;
+        return odd >= 2 && odd * 2 >= total;
+    }
+
+    /** Première ligne non vide du texte, nettoyée pour servir de titre. */
+    static String firstLineTitle(String t) {
+        int pos = 0;
+        int n = t.length();
+        while (pos < n) {
+            int nl = t.indexOf('\n', pos);
+            int end = nl < 0 ? n : nl;
+            String line = t.substring(pos, Math.min(end, pos + 400)).trim();
+            if (!line.isEmpty()) {
+                line = line.replaceAll("[\\\\/:*?\"<>|]", " ").replaceAll("\\s+", " ").trim();
+                if (line.length() > 60) {
+                    line = line.substring(0, 60).trim();
+                }
+                return line;
+            }
+            if (nl < 0) {
+                break;
+            }
+            pos = nl + 1;
+        }
+        return "";
     }
 
     private long querySize(Uri u) {
